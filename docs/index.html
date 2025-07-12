@@ -41,7 +41,7 @@
     async function loadModels() {
       // ✅ GitHub에서 best.onnx 불러오기
       yoloSession = await ort.InferenceSession.create(
-        "https://github.com/kimminji0430/jutam-obstacle/raw/main/best.onnx"
+        "https://kimminji0430.github.io/jutam-obstacle/best.onnx"
       );
       cocoModel = await cocoSsd.load();
     }
