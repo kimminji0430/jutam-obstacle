@@ -11,23 +11,23 @@
     body { background: #181818; color: #fff; text-align: center; font-family: sans-serif; }
     #canvas { background: #111; border-radius: 16px; margin-top: 20px; }
     button { margin-top: 18px; font-size: 1.2em; padding: 0.4em 1.2em; }
+    video { display: none; }
   </style>
 </head>
 <body>
   <h2>실시간 객체 인식 + 음성 안내 (YOLO + COCO)</h2>
   <canvas id="canvas" width="640" height="640"></canvas>
+  <video id="video" width="640" height="640" autoplay playsinline muted></video>
   <button onclick="start()">카메라 시작</button>
 
   <script>
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    let video, stream, yoloSession, cocoModel;
+    const video = document.getElementById('video');
+    let stream, yoloSession, cocoModel;
     let lastSpoken = {};
 
-    // YOLO 사용자 정의 클래스
     const yoloLabels = ["bar obstacle", "food waste container", "kickboard", "trash bag"];
-
-    // COCO에서 감지할 클래스
     const cocoTargets = ["person", "bicycle"];
     const LABELS_KO = {
       "bar obstacle": "막대 장애물",
@@ -39,7 +39,7 @@
     };
 
     async function loadModels() {
-      // ✅ GitHub에서 best.onnx 불러오기
+      // ✅ CORS 허용된 GitHub Pages 주소로 변경
       yoloSession = await ort.InferenceSession.create(
         "https://kimminji0430.github.io/jutam-obstacle/best.onnx"
       );
@@ -48,16 +48,15 @@
 
     async function start() {
       await loadModels();
+
       stream = await navigator.mediaDevices.getUserMedia({
         video: { width: 640, height: 640, facingMode: "environment" },
         audio: false
       });
-      video = document.createElement('video');
-      video.setAttribute('playsinline', true);
+
       video.srcObject = stream;
       await video.play();
-      video.width = 640;
-      video.height = 640;
+
       detectFrame();
     }
 
@@ -82,13 +81,13 @@
     async function detectFrame() {
       ctx.drawImage(video, 0, 0, 640, 640);
 
-      // 🎯 YOLO 감지
+      // YOLO
       const imgData = ctx.getImageData(0, 0, 640, 640).data;
       const input = new Float32Array(1 * 3 * 640 * 640);
       for (let i = 0, j = 0; i < imgData.length; i += 4, j += 3) {
         input[j] = imgData[i] / 255;
-        input[j+1] = imgData[i+1] / 255;
-        input[j+2] = imgData[i+2] / 255;
+        input[j + 1] = imgData[i + 1] / 255;
+        input[j + 2] = imgData[i + 2] / 255;
       }
       const tensor = new ort.Tensor('float32', input, [1, 3, 640, 640]);
       const feeds = { [yoloSession.inputNames[0]]: tensor };
@@ -127,7 +126,7 @@
         }
       }
 
-      // 🎯 COCO 감지
+      // COCO
       const cocoPredictions = await cocoModel.detect(video);
       cocoPredictions.forEach(pred => {
         if (cocoTargets.includes(pred.class) && pred.score > 0.6) {
@@ -143,6 +142,9 @@
 
       requestAnimationFrame(detectFrame);
     }
+
+    // ✅ 버튼 연결 보장
+    window.start = start;
   </script>
 </body>
 </html>
