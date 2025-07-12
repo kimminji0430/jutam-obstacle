@@ -11,20 +11,17 @@
     body { background: #181818; color: #fff; text-align: center; font-family: sans-serif; }
     #canvas { background: #111; border-radius: 16px; margin-top: 20px; }
     button { margin-top: 18px; font-size: 1.2em; padding: 0.4em 1.2em; }
-    video { display: none; }
   </style>
 </head>
 <body>
   <h2>실시간 객체 인식 + 음성 안내 (YOLO + COCO)</h2>
   <canvas id="canvas" width="640" height="640"></canvas>
-  <video id="video" width="640" height="640" autoplay playsinline muted></video>
   <button onclick="start()">카메라 시작</button>
 
   <script>
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    const video = document.getElementById('video');
-    let stream, yoloSession, cocoModel;
+    let video, stream, yoloSession = null, cocoModel;
     let lastSpoken = {};
 
     const yoloLabels = ["bar obstacle", "food waste container", "kickboard", "trash bag"];
@@ -39,25 +36,40 @@
     };
 
     async function loadModels() {
-      // ✅ CORS 허용된 GitHub Pages 주소로 변경
-      yoloSession = await ort.InferenceSession.create(
-        "https://kimminji0430.github.io/jutam-obstacle/best.onnx"
-      );
+      try {
+        // ⚠️ 반드시 HTTPS 환경에서 사용해야 작동합니다
+        yoloSession = await ort.InferenceSession.create(
+          "https://kimminji0430.github.io/jutam-obstacle/best.onnx"
+        );
+        console.log("YOLO 모델 로드 완료");
+      } catch (e) {
+        console.warn("YOLO 모델 로드 실패. COCO 모델만 사용됩니다.", e);
+        yoloSession = null;
+      }
+
       cocoModel = await cocoSsd.load();
+      console.log("COCO 모델 로드 완료");
     }
 
     async function start() {
-      await loadModels();
+      try {
+        await loadModels();
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 640, facingMode: "environment" },
+          audio: false
+        });
 
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 640, facingMode: "environment" },
-        audio: false
-      });
-
-      video.srcObject = stream;
-      await video.play();
-
-      detectFrame();
+        video = document.createElement('video');
+        video.setAttribute('playsinline', true);
+        video.srcObject = stream;
+        await video.play();
+        video.width = 640;
+        video.height = 640;
+        detectFrame();
+      } catch (e) {
+        alert("카메라 접근 실패: HTTPS로 접속했는지, 브라우저 권한이 허용되었는지 확인하세요.");
+        console.error("카메라 시작 실패", e);
+      }
     }
 
     function speakAlert(label) {
@@ -81,70 +93,77 @@
     async function detectFrame() {
       ctx.drawImage(video, 0, 0, 640, 640);
 
-      // YOLO
-      const imgData = ctx.getImageData(0, 0, 640, 640).data;
-      const input = new Float32Array(1 * 3 * 640 * 640);
-      for (let i = 0, j = 0; i < imgData.length; i += 4, j += 3) {
-        input[j] = imgData[i] / 255;
-        input[j + 1] = imgData[i + 1] / 255;
-        input[j + 2] = imgData[i + 2] / 255;
-      }
-      const tensor = new ort.Tensor('float32', input, [1, 3, 640, 640]);
-      const feeds = { [yoloSession.inputNames[0]]: tensor };
-      const yoloResults = await yoloSession.run(feeds);
-      const output = yoloResults['output0'].data;
+      // YOLO 감지
+      if (yoloSession) {
+        try {
+          const imgData = ctx.getImageData(0, 0, 640, 640).data;
+          const input = new Float32Array(1 * 3 * 640 * 640);
+          for (let i = 0, j = 0; i < imgData.length; i += 4, j += 3) {
+            input[j] = imgData[i] / 255;
+            input[j+1] = imgData[i+1] / 255;
+            input[j+2] = imgData[i+2] / 255;
+          }
+          const tensor = new ort.Tensor('float32', input, [1, 3, 640, 640]);
+          const feeds = { [yoloSession.inputNames[0]]: tensor };
+          const yoloResults = await yoloSession.run(feeds);
+          const output = yoloResults['output0'].data;
 
-      const numDetections = 25200;
-      const numAttrs = 7;
-      for (let i = 0; i < numDetections; i++) {
-        const offset = i * numAttrs;
-        const x = output[offset];
-        const y = output[offset + 1];
-        const w = output[offset + 2];
-        const h = output[offset + 3];
-        const conf = output[offset + 4];
-        const score = output[offset + 5];
-        const classId = output[offset + 6];
+          const numDetections = 25200;
+          const numAttrs = 7;
+          for (let i = 0; i < numDetections; i++) {
+            const offset = i * numAttrs;
+            const x = output[offset];
+            const y = output[offset + 1];
+            const w = output[offset + 2];
+            const h = output[offset + 3];
+            const conf = output[offset + 4];
+            const score = output[offset + 5];
+            const classId = output[offset + 6];
 
-        if (conf * score > 0.45 && classId < yoloLabels.length) {
-          const cx = x * 640;
-          const cy = y * 640;
-          const boxW = w * 640;
-          const boxH = h * 640;
-          const x0 = cx - boxW / 2;
-          const y0 = cy - boxH / 2;
+            if (conf * score > 0.45 && classId < yoloLabels.length) {
+              const cx = x * 640;
+              const cy = y * 640;
+              const boxW = w * 640;
+              const boxH = h * 640;
+              const x0 = cx - boxW / 2;
+              const y0 = cy - boxH / 2;
 
-          const label = yoloLabels[classId];
-          ctx.strokeStyle = "#38e";
-          ctx.lineWidth = 2;
-          ctx.strokeRect(x0, y0, boxW, boxH);
-          ctx.fillStyle = "#38e";
-          ctx.font = "16px sans-serif";
-          ctx.fillText(label, x0, y0 > 18 ? y0 - 4 : y0 + 18);
+              const label = yoloLabels[classId];
+              ctx.strokeStyle = "#38e";
+              ctx.lineWidth = 2;
+              ctx.strokeRect(x0, y0, boxW, boxH);
+              ctx.fillStyle = "#38e";
+              ctx.font = "16px sans-serif";
+              ctx.fillText(label, x0, y0 > 18 ? y0 - 4 : y0 + 18);
 
-          speakAlert(label);
+              speakAlert(label);
+            }
+          }
+        } catch (e) {
+          console.warn("YOLO 감지 실패", e);
         }
       }
 
-      // COCO
-      const cocoPredictions = await cocoModel.detect(video);
-      cocoPredictions.forEach(pred => {
-        if (cocoTargets.includes(pred.class) && pred.score > 0.6) {
-          ctx.strokeStyle = "#22c55e";
-          ctx.lineWidth = 2;
-          ctx.strokeRect(...pred.bbox);
-          ctx.font = "16px sans-serif";
-          ctx.fillStyle = "#22c55e";
-          ctx.fillText(pred.class, pred.bbox[0], pred.bbox[1] > 18 ? pred.bbox[1] - 4 : pred.bbox[1] + 18);
-          speakAlert(pred.class);
-        }
-      });
+      // COCO 감지
+      try {
+        const cocoPredictions = await cocoModel.detect(video);
+        cocoPredictions.forEach(pred => {
+          if (cocoTargets.includes(pred.class) && pred.score > 0.6) {
+            ctx.strokeStyle = "#22c55e";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(...pred.bbox);
+            ctx.font = "16px sans-serif";
+            ctx.fillStyle = "#22c55e";
+            ctx.fillText(pred.class, pred.bbox[0], pred.bbox[1] > 18 ? pred.bbox[1] - 4 : pred.bbox[1] + 18);
+            speakAlert(pred.class);
+          }
+        });
+      } catch (e) {
+        console.warn("COCO 감지 실패", e);
+      }
 
       requestAnimationFrame(detectFrame);
     }
-
-    // ✅ 버튼 연결 보장
-    window.start = start;
   </script>
 </body>
 </html>
